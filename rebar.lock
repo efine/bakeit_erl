@@ -1,0 +1,12 @@
+[{<<"getopt">>,
+  {git,"https://github.com/jcomellas/getopt.git",
+       {ref,"68fe326f2c7585eb32a5b136dffc75428a53fc02"}},
+  0},
+ {<<"jsx">>,
+  {git,"git@github.com:talentdeficit/jsx.git",
+       {ref,"3074d4865b3385a050badf7828ad31490d860df5"}},
+  0},
+ {<<"zucchini">>,
+  {git,"https://github.com/devinus/zucchini.git",
+       {ref,"429c9e0f9f67911c1825fbebff7d0fdc59e56b90"}},
+  0}].

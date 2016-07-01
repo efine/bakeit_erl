@@ -1,0 +1,26 @@
+{application, bakeit,
+ [{description, "BakeIt"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {applications,
+   [kernel,
+    stdlib,
+    crypto,
+    asn1,
+    public_key,
+    ssl,
+    inets,
+    jsx
+   ]},
+  {env,[]},
+  {modules, [
+             bakeit,
+             bakeit_cmdline,
+             bakeit_config,
+             bakeit_util
+            ]},
+
+  {maintainers, []},
+  {licenses, []},
+  {links, []}
+ ]}.
