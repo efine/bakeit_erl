@@ -17,6 +17,9 @@
              bakeit,
              bakeit_cmdline,
              bakeit_config,
+             bakeit_ini,
+             bakeit_main,
+             bakeit_upload,
              bakeit_util
             ]},
 
