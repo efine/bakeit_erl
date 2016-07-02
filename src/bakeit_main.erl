@@ -99,7 +99,10 @@ run(Action, Config) ->
 %%--------------------------------------------------------------------
 -spec version(PgmName) -> ok when PgmName :: string().
 version(PgmName) ->
-    io:format(standard_error, "~s ~s~n", [PgmName, ?APP_VERSION]).
+    ok = application:load(bakeit),
+    Apps = application:loaded_applications(),
+    {bakeit, _Desc, Vsn} = lists:keyfind(bakeit, 1, Apps),
+    io:format(standard_error, "~s ~s~n", [PgmName, Vsn]).
 
 %%--------------------------------------------------------------------
 -spec usage(PgmName) -> ok when PgmName :: string().

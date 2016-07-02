@@ -1,9 +1,11 @@
 -module(bakeit_upload).
 
 -export([go/1]).
--import(bakeit_util, [msg/1, msg/2,  err_msg/2, req_prop/2]).
+-import(bakeit_util, [msg/1, msg/2, err_msg/1, err_msg/2, req_prop/2]).
 
 -include("bakeit.hrl").
+
+-define(PASTERY_URL, "https://www.pastery.net/api/paste/").
 
 %%====================================================================
 %% API functions
@@ -11,52 +13,67 @@
 
 %%--------------------------------------------------------------------
 go(Config) ->
-    Cfg = val(req_prop(bakeit, Config)),
+    Cfg = req_val(bakeit, Config),
     ok = bakeit_config:init(Cfg),
-    Files = val(req_prop(files, Config)),
+    Files = req_val(files, Config),
     BakeitCfg = bakeit_ini:read(),
     Data = get_data(Files),
 
-    _ = is_debug() andalso dbg(Config, Cfg, Files, BakeitCfg, Data),
+    dbg_do(fun() -> dbg(Config, Cfg, Files, BakeitCfg, Data) end),
 
     {ok, _Apps} = application:ensure_all_started(bakeit),
 
+    Request = make_request(#{data      => Data,
+                             api_key   => req_val(api_key, BakeitCfg),
+                             title     => title_or_filename(Cfg, Files),
+                             language  => req_val(language, Cfg),
+                             duration  => req_val(duration, Cfg),
+                             max_views => req_val(max_views, Cfg)
+                            }),
     msg("Uploading to Pastery...~n"),
-    Response = upload(#{data      => Data,
-                        api_key   => val(req_prop(api_key, BakeitCfg)),
-                        title     => title_or_filename(Cfg, Files),
-                        language  => val(req_prop(language, Cfg)),
-                        duration  => val(req_prop(duration, Cfg)),
-                        max_views => val(req_prop(max_views, Cfg))
-                       }),
-
-    case Response of
+    case upload(Request) of
         {ok, EJSON} ->
-            URL = val(req_prop(<<"url">>, EJSON)),
-            msg("Paste URL: ~s~n", [URL]),
+            Url = req_val(<<"url">>, EJSON),
+            msg("Paste URL: ~s~n", [Url]),
+            ok = maybe_launch_webbrowser(Url, Cfg),
             ?RC_SUCCESS;
         Err ->
             Err
     end.
 
 %%--------------------------------------------------------------------
-upload(#{} = M) ->
-    Body = maps:get(data, M),
-    QueryParams = make_qps(M),
-    Url = make_url("https://www.pastery.net/api/paste/", QueryParams),
-    dbg_print("Url: ~s~n", [Url]),
-    Headers = [{"User-Agent", "'Mozilla/5.0 (Erlang) bakeit library"},
-               {"Content-Length", integer_to_list(byte_size(Body))}],
-    ContentType = "application/octet-stream",
-    Request = {Url, Headers, ContentType, Body},
+upload({_Url, _Headers, _ContentType, _Body} = Request) ->
     HttpOpts = [{ssl, []}],
     Opts = [{body_format, binary}],
     dbg_do(fun() -> httpc:set_options([{verbose, debug}]) end),
-    case httpc:request(post, Request, HttpOpts, Opts) of
-        {ok, Response} ->
-            parse_response(Response);
-        Err ->
-            Err
+    post_upload_req(Request, HttpOpts, Opts).
+
+%%--------------------------------------------------------------------
+make_request(#{} = M) ->
+    Body = maps:get(data, M),
+    QueryParams = make_qps(M),
+    Url = make_url(?PASTERY_URL, QueryParams),
+    dbg_print("Url: ~s~n", [Url]),
+    Headers = [ua_hdr(), content_length_hdr(Body)],
+    ContentType = "application/octet-stream",
+    {Url, Headers, ContentType, Body}.
+
+
+%%--------------------------------------------------------------------
+maybe_launch_webbrowser(Url, Cfg) ->
+    _ = req_val(open_browser, Cfg) andalso launch_webbrowser(Url),
+    ok.
+
+%%--------------------------------------------------------------------
+launch_webbrowser(<<Url/binary>>) ->
+    launch_webbrowser(binary_to_list(Url));
+launch_webbrowser(Url) ->
+    case webbrowser:open(Url) of
+        ok ->
+            true;
+        {error, {not_found, Msg}} ->
+            err_msg(Msg),
+            false
     end.
 
 %%--------------------------------------------------------------------
@@ -84,11 +101,19 @@ read_stdin(IOList) ->
     end.
 
 %%--------------------------------------------------------------------
-title_or_filename(Cfg, []) ->
-    val(req_prop(title, Cfg));
-title_or_filename(_Cfg, [Filename]) ->
-    filename:basename(Filename).
+title_or_filename(Cfg, Files) ->
+    case req_val(title, Cfg) of
+        [] ->
+            get_filename(Files);
+        Title ->
+            Title
+    end.
 
+%%--------------------------------------------------------------------
+get_filename([Filename|_]) ->
+    filename:basename(Filename);
+get_filename([]) ->
+    [].
 
 %%--------------------------------------------------------------------
 make_qps(#{} = M) ->
@@ -122,10 +147,29 @@ make_url(Url, QPs) ->
 
 %%--------------------------------------------------------------------
 encode_qps(QPs) ->
-    string:join([Key ++ "=" ++ Val || {Key, Val} <- QPs], "&").
+    encode_qps(QPs, []).
+
+encode_qps([{K, V}], Acc) ->
+    encode_qps([], [encode_qp(K, V) | Acc]);
+encode_qps([{K, V}|T], Acc) ->
+    encode_qps(T, [$&, encode_qp(K, V) | Acc]);
+encode_qps([], Acc) ->
+    lists:reverse(Acc).
+
+encode_qp(K, V) ->
+    [K, $=, http_uri:encode(V)].
 
 %%--------------------------------------------------------------------
-parse_response({{_Version, Status, Reason}, _Headers, Body}) ->
+post_upload_req(Request, HttpOpts, Opts) ->
+    case httpc:request(post, Request, HttpOpts, Opts) of
+        {ok, Response} ->
+            parse_upload_rsp(Response);
+        Err ->
+            Err
+    end.
+
+%%--------------------------------------------------------------------
+parse_upload_rsp({{_Version, Status, Reason}, _Headers, Body}) ->
         dbg_print("Status: ~B~n"
                   "Reason: '~s'~n"
                   "Body:   ~P~n", [Status, Reason, Body, 512]),
@@ -133,7 +177,7 @@ parse_response({{_Version, Status, Reason}, _Headers, Body}) ->
             N when N >= 300, N < 400 ->
                 Msg = ["Unexpected redirect: ", integer_to_list(N),
                        " ", Reason],
-                {?RC_FATAL, errm(Msg)};
+                {?RC_FATAL, to_b(Msg)};
             413 ->
                 {?RC_FATAL, "The chosen file was rejected by the server "
                             "because it was too large, please try a smaller "
@@ -143,11 +187,11 @@ parse_response({{_Version, Status, Reason}, _Headers, Body}) ->
             N when N >= 400, N < 500 ->
                 Msg = ["There was a problem with the request: ",
                        integer_to_list(N), " ", Reason],
-                {?RC_FATAL, errm(Msg)};
+                {?RC_FATAL, to_b(Msg)};
             N when N >= 500 ->
                 Msg = ["There was a server error ", integer_to_list(N),
                        ", please try again later."],
-                {?RC_FATAL, errm(Msg)};
+                {?RC_FATAL, to_b(Msg)};
             _ ->
                 {ok, parse_body(Body)}
         end.
@@ -156,7 +200,7 @@ parse_response({{_Version, Status, Reason}, _Headers, Body}) ->
 get_error_msg(Body) ->
     try
         EJSON = parse_body(Body),
-        val(req_prop(<<"error_msg">>, EJSON))
+        req_val(<<"error_msg">>, EJSON)
     catch
         _:_ ->
             Body
@@ -165,10 +209,6 @@ get_error_msg(Body) ->
 %%--------------------------------------------------------------------
 parse_body(Body) ->
     jsx:decode(Body).
-
-%%--------------------------------------------------------------------
-is_debug() ->
-    bakeit_config:get(debug).
 
 %%--------------------------------------------------------------------
 dbg_print(Fmt) ->
@@ -181,22 +221,35 @@ dbg_print(Fmt, Args) ->
 %%--------------------------------------------------------------------
 dbg(Config, Cfg, Files, BakeitCfg, Data) ->
     dbg_do(fun() ->
-                   err_msg("Config:~n~p~n", [Config]),
-                   err_msg("Cfg:~n~p~n", [Cfg]),
-                   err_msg("Files: ~p~n", [Files]),
-                   err_msg("BakeitCfg: ~p~n", [BakeitCfg]),
-                   err_msg("Data:~n~s~n", [Data]),
-                   true
+                   _ = err_msg("Config:~n~p~n", [Config]),
+                   _ = err_msg("Cfg:~n~p~n", [Cfg]),
+                   _ = err_msg("Files: ~p~n", [Files]),
+                   _ = err_msg("BakeitCfg: ~p~n", [BakeitCfg]),
+                   _ = err_msg("Data:~n~s~n", [Data])
            end).
 
 %%--------------------------------------------------------------------
 dbg_do(Fun) when is_function(Fun, 0) ->
-    is_debug() andalso ?mktrue(Fun()).
+    bakeit_config:get(debug) andalso ?mktrue(Fun()).
 
 %%--------------------------------------------------------------------
 val({_, V}) -> V.
 
 %%--------------------------------------------------------------------
-errm(S) ->
+req_val(K, PL) ->
+    val(req_prop(K, PL)).
+
+%%--------------------------------------------------------------------
+to_b(<<B/binary>>) ->
+    B;
+to_b(S) when is_list(S) ->
     list_to_binary(S).
+
+%%--------------------------------------------------------------------
+content_length_hdr(<<Body/binary>>) ->
+    {"Content-Length", integer_to_list(byte_size(Body))}.
+
+%%--------------------------------------------------------------------
+ua_hdr() ->
+    {"User-Agent", "'Mozilla/5.0 (Erlang) bakeit library"}.
 

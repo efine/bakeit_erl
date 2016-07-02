@@ -1,6 +1,6 @@
 {application, bakeit,
- [{description, "BakeIt"},
-  {vsn, "0.1.0"},
+ [{description, "BakeIt (Erlang flavor)"},
+  {vsn, "1.0"},
   {registered, []},
   {applications,
    [kernel,
